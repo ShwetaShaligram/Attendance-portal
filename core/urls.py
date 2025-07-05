@@ -9,22 +9,21 @@ from .views import (
     CheckInView,
     CheckOutView,
     MyRegularizations,
-
-    # Shared Approval Views (Manager + HR)
     ManagerRegularizationsView,
     ApproveRegularization,
     RejectRegularization,
     TeamAttendanceView,
-
-    # HR Panel
     HRUserListView,
     HRAllRegularizationsView,
+    HREmployeeAttendanceView,
+    AdminUserListView,
+    AdminAttendanceView,
+    AdminAllRegularizations,
+    HRTodaySummaryView,
+    HRManagerRegularizationCreate,  # ✅ missing import added here!
 )
-from .views import HREmployeeAttendanceView
 from django.urls import path
-from .views import AdminUserListView, AdminAttendanceView, AdminAllRegularizations
-from .views import HRTodaySummaryView
-
+from . import views
 
 urlpatterns = [
     # 🔐 Auth
@@ -44,7 +43,7 @@ urlpatterns = [
     path('employee/regularize/', RegularizationCreate.as_view(), name='employee-regularize'),
     path('employee/my-regularizations/', MyRegularizations.as_view(), name='employee-my-regularizations'),
 
-    # ✅ Approval (used by Manager or HR)
+    # ✅ Approval (used by Manager or HR or Admin)
     path('manager/regularizations/', ManagerRegularizationsView.as_view(), name='manager-regularizations'),
     path('manager/regularizations/<int:pk>/approve/', ApproveRegularization.as_view(), name='approve-regularization'),
     path('manager/regularizations/<int:pk>/reject/', RejectRegularization.as_view(), name='reject-regularization'),
@@ -52,14 +51,20 @@ urlpatterns = [
     # 📊 Team Attendance
     path('manager/attendance/', TeamAttendanceView.as_view(), name='team-attendance'),
 
-    # 🧑‍💼 HR Panel
+    # 🧑‍⚕️ HR Panel
     path('hr/users/', HRUserListView.as_view(), name='hr-users'),
     path('hr/regularizations/', HRAllRegularizationsView.as_view(), name='hr-regularizations'),
     path('hr/attendance/', HREmployeeAttendanceView.as_view(), name='hr-employee-attendance'),
-     path('admin/users/', AdminUserListView.as_view(), name='admin-users'),
-    path('admin/attendance/', AdminAttendanceView.as_view(), name='admin-attendance'),
-    path('admin/regularizations/', AdminAllRegularizations.as_view(), name='admin-regularizations'),
     path('hr/summary/', HRTodaySummaryView, name='hr-summary'),
 
+    # 👑 Admin Panel
+    path('admin/users/', AdminUserListView.as_view(), name='admin-users'),
+    path('admin/attendance/', AdminAttendanceView.as_view(), name='admin-attendance'),
+    path('admin/regularizations/', AdminAllRegularizations.as_view(), name='admin-regularizations'),
+    path('admin/regularizations/<int:pk>/approve/', ApproveRegularization.as_view(), name='admin-approve'),
+    path('admin/regularizations/<int:pk>/reject/', RejectRegularization.as_view(), name='admin-reject'),
 
+    # 🆕 HR/Manager sending requests to Admin
+    path('hr-manager/regularize/', HRManagerRegularizationCreate.as_view(), name='hr-manager-regularize'),
+    path('hr/my-regularizations/', views.hr_my_regularizations, name='hr-my-regularizations'),
 ]

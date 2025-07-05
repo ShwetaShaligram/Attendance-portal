@@ -5,16 +5,18 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
-from django.utils.timezone import now
+from django.utils.timezone import now, make_aware, localdate
 from datetime import datetime, time
 from rest_framework.generics import ListAPIView
+from rest_framework.decorators import api_view, permission_classes
+from django.db.models import Q
 
 from .models import CustomUser, Attendance, RegularizationRequest
 from .serializers import (
     RegisterSerializer,
     ManagerSerializer,
     AttendanceSerializer,
-    RegularizationSerializer,
+    RegularizationRequestSerializer,
     UserSerializer,
 )
 
@@ -24,13 +26,12 @@ class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
 
-
 # ✅ Login
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        email = request.data.get('email')  # Use 'email' instead of 'username'
+        email = request.data.get('email')
         password = request.data.get('password')
 
         user = authenticate(request, email=email, password=password)
@@ -66,8 +67,6 @@ class EmployeeAttendanceList(generics.ListAPIView):
         return Attendance.objects.filter(user=self.request.user).order_by('-date')
 
 # ✅ Check-In
-from django.utils.timezone import now, make_aware
-
 class CheckInView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -79,11 +78,8 @@ class CheckInView(APIView):
             return Response({'error': 'Already checked in today'}, status=400)
 
         check_in_time = now()
-
-        # 🛠️ Make office_start timezone-aware
         office_start_naive = datetime.combine(today, time(10, 6))
         office_start = make_aware(office_start_naive)
-
         is_late = check_in_time > office_start
 
         attendance = Attendance.objects.create(user=user, date=today, check_in=check_in_time)
@@ -93,7 +89,6 @@ class CheckInView(APIView):
             'data': AttendanceSerializer(attendance).data,
             'is_late': is_late
         })
-
 
 # ✅ Check-Out
 class CheckOutView(APIView):
@@ -124,7 +119,7 @@ class CheckOutView(APIView):
 
 # ✅ Regularization — Only EMPLOYEES can submit
 class RegularizationCreate(generics.CreateAPIView):
-    serializer_class = RegularizationSerializer
+    serializer_class = RegularizationRequestSerializer
     permission_classes = [IsAuthenticated]
 
     def perform_create(self, serializer):
@@ -134,7 +129,7 @@ class RegularizationCreate(generics.CreateAPIView):
 
 # ✅ View my own requests
 class MyRegularizations(generics.ListAPIView):
-    serializer_class = RegularizationSerializer
+    serializer_class = RegularizationRequestSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
@@ -142,7 +137,7 @@ class MyRegularizations(generics.ListAPIView):
 
 # ✅ Manager sees their team’s requests
 class ManagerRegularizationsView(generics.ListAPIView):
-    serializer_class = RegularizationSerializer
+    serializer_class = RegularizationRequestSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
@@ -150,9 +145,13 @@ class ManagerRegularizationsView(generics.ListAPIView):
 
 # ✅ Shared approval logic (Manager OR HR)
 def can_approve(user, reg):
-    return (reg.user.manager == user) or (user.role == 'hr')
+    return (
+        reg.user.manager == user or
+        user.role == 'hr' or
+        user.role == 'admin'
+    )
 
-# ✅ Approve Regularization (Manager or HR)
+# ✅ Approve Regularization
 class ApproveRegularization(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -174,7 +173,7 @@ class ApproveRegularization(APIView):
         except RegularizationRequest.DoesNotExist:
             return Response({'error': '❌ Request not found'}, status=404)
 
-# ✅ Reject Regularization (Manager or HR)
+# ✅ Reject Regularization
 class RejectRegularization(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -227,20 +226,23 @@ class HRUserListView(ListAPIView):
 
 # ✅ HR sees all regularizations
 class HRAllRegularizationsView(ListAPIView):
-    serializer_class = RegularizationSerializer
+    serializer_class = RegularizationRequestSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         if self.request.user.role != 'hr':
             return RegularizationRequest.objects.none()
-        return RegularizationRequest.objects.all().order_by('-date')
-# ✅ HR: View attendance of any employee
+        return RegularizationRequest.objects.filter(user__role='employee').order_by('-date')
+
+
+# ✅ HR views employee attendance
 class HREmployeeAttendanceView(ListAPIView):
     serializer_class = AttendanceSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         user_id = self.request.query_params.get('user_id')
+    
         date = self.request.query_params.get('date')
         queryset = Attendance.objects.all()
 
@@ -250,57 +252,27 @@ class HREmployeeAttendanceView(ListAPIView):
             queryset = queryset.filter(date=date)
 
         return queryset.order_by('-date')
-#============================
-#🔙 BACKEND (views.py)
-#============================
-from rest_framework import generics, status
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from django.db.models import Q
-from .models import CustomUser, Attendance, RegularizationRequest
-from .serializers import UserSerializer, AttendanceSerializer, RegularizationSerializer
 
-class AdminUserListView(generics.ListAPIView):
-    serializer_class = UserSerializer
+# ✅ HR/Manager submit request to Admin
+class HRManagerRegularizationCreate(generics.CreateAPIView):
+    serializer_class = RegularizationRequestSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        if self.request.user.role != 'admin':
-            return CustomUser.objects.none()
-        return CustomUser.objects.all().order_by('id')
+    def perform_create(self, serializer):
+        if self.request.user.role not in ['hr', 'manager']:
+            raise PermissionDenied("Only HR or Manager can submit to Admin.")
+        serializer.save(user=self.request.user)
 
-class AdminAttendanceView(generics.ListAPIView):
-    serializer_class = AttendanceSerializer
-    permission_classes = [IsAuthenticated]
+# ✅ HR's Own Requests
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def hr_my_regularizations(request):
+    user = request.user
+    requests = RegularizationRequest.objects.filter(user=user).order_by('-date')
+    serializer = RegularizationRequestSerializer(requests, many=True)
+    return Response(serializer.data)
 
-    def get_queryset(self):
-        if self.request.user.role != 'admin':
-            return Attendance.objects.none()
-
-        user_id = self.request.query_params.get('user_id')
-        date = self.request.query_params.get('date')
-
-        queryset = Attendance.objects.all()
-        if user_id:
-            queryset = queryset.filter(user__id=user_id)
-        if date:
-            queryset = queryset.filter(date=date)
-
-        return queryset.order_by('-date')
-
-class AdminAllRegularizations(generics.ListAPIView):
-    serializer_class = RegularizationSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        if self.request.user.role != 'admin':
-            return RegularizationRequest.objects.none()
-        return RegularizationRequest.objects.all().order_by('-date')
-from rest_framework.decorators import api_view, permission_classes
-from django.utils.timezone import localdate
-from django.db.models import Q
-
+# ✅ HR Today Summary
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def HRTodaySummaryView(request):
@@ -321,3 +293,43 @@ def HRTodaySummaryView(request):
         'late_arrivals': late,
         'pending_requests': pending_requests
     })
+
+# ✅ Admin - Users
+class AdminUserListView(generics.ListAPIView):
+    serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if self.request.user.role != 'admin':
+            return CustomUser.objects.none()
+        return CustomUser.objects.all().order_by('id')
+
+# ✅ Admin - Attendance
+class AdminAttendanceView(generics.ListAPIView):
+    serializer_class = AttendanceSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if self.request.user.role != 'admin':
+            return Attendance.objects.none()
+
+        user_id = self.request.query_params.get('user_id')
+        date = self.request.query_params.get('date')
+
+        queryset = Attendance.objects.all()
+        if user_id:
+            queryset = queryset.filter(user__id=user_id)
+        if date:
+            queryset = queryset.filter(date=date)
+
+        return queryset.order_by('-date')
+
+# ✅ Admin - Regularizations
+class AdminAllRegularizations(generics.ListAPIView):
+    serializer_class = RegularizationRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if self.request.user.role != 'admin':
+            return RegularizationRequest.objects.none()
+        return RegularizationRequest.objects.all().order_by('-date')
